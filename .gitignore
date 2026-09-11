@@ -1,0 +1,8 @@
+/bin/
+/passman
+*.pmbak
+*.pem
+*.key
+.env
+.env.*
+coverage.out
