@@ -132,4 +132,13 @@ make lint
 make security
 ```
 
+## Agent Skill
+
+仓库内置 [`passman` skill](.agents/skills/passman/SKILL.md)，支持 Agent 自动发现安全查询、存储和注入流程。支持项目级 skill 的 Agent 克隆仓库后即可使用；也可以安装到用户目录：
+
+```sh
+mkdir -p "$HOME/.agents/skills"
+cp -R .agents/skills/passman "$HOME/.agents/skills/passman"
+```
+
 项目采用手动构造注入；CLI、守护进程、IPC、存储、加密、执行器、遮罩器和备份模块相互隔离。秘密值使用 `[]byte` 传递并在可控位置尽力清零，但 Go 运行时不保证完整的内存零化。
