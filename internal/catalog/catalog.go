@@ -142,7 +142,7 @@ func (s *Store) TrackField(ref string, add bool) error {
 }
 
 func (s *Store) RemoveTracked(target string) error {
-	if strings.Contains(target, "#") {
+	if strings.Contains(target, "#") || strings.HasPrefix(target, "passman://") {
 		return s.TrackField(target, false)
 	}
 	if err := vault.ValidateEntry(target); err != nil {

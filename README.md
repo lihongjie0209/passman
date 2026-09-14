@@ -7,7 +7,7 @@
 
 ## 安装
 
-需要 Go 1.25.10 或更高补丁版本，以及 Linux 或 macOS。较早的 Go 1.25 版本包含本项目会触达的标准库安全漏洞。
+需要 Go 1.25.13 或更高补丁版本，以及 Linux 或 macOS。较早的 Go 1.25 版本包含本项目会触达的标准库安全漏洞。
 
 ```sh
 make build
@@ -40,6 +40,29 @@ secret-producing-command | passman entry set service#password --stdin
 
 # 生成后直接保存，只报告成功，不显示生成值
 passman entry set database#password --generate --length 32
+
+# 只能通过 run 使用，禁止 reveal；也可设置失效和轮换提醒时间
+passman entry set deploy#token --generate --exec-only \
+  --expires-in 24h \
+  --rotate-after 2026-10-01T00:00:00Z
+```
+
+设置过策略的秘密会在 `entry list` 元数据中显示 `exec_only`、`expires_at`、
+`rotate_after`、`expired` 和 `rotation_due`。失效秘密在 `run` 与 `reveal` 等所有
+路径上都会被拒绝；更新秘密时未传策略参数会保留已有策略。
+
+策略可以独立调整而无需重新输入秘密：
+
+```sh
+passman entry policy get deploy#token
+passman entry policy set deploy#token --exec-only --expires-in 12h
+passman entry policy set deploy#token --allow-reveal --clear-expiry
+passman entry policy set deploy#token --rotate-after 2026-12-01T00:00:00Z
+passman entry policy set deploy#token --clear-rotation
+
+# 默认仅列出已经失效或到达轮换日期的字段
+passman entry stale
+passman entry stale --within 30d
 ```
 
 Agent 查看元数据和使用秘密：
@@ -55,6 +78,67 @@ passman run \
 
 passman run --stdin database#password -- some-command --password-stdin
 ```
+
+## 原生 OpenSSH 集成
+
+passman daemon 同时提供标准 SSH Agent socket。配置一次后，`ssh`、`scp`、
+`sftp`、`rsync` 和 Git SSH 都可以继续使用原始命令，不需要 `passman run`、
+`SSH_AUTH_SOCK` 或临时私钥文件：
+
+```sh
+# 私钥字段必须命名为 private_key，并设置 exec-only 才会提供给 SSH Agent
+passman entry set ssh/lihongjie#private_key \
+  --file ~/.ssh/lihongjie \
+  --exec-only
+
+# 查看将写入的 OpenSSH 配置；确认后执行一次 setup
+passman ssh-agent config
+passman ssh-agent setup --yes
+
+passman unlock --ttl 8h
+passman ssh-agent status
+
+ssh fnos-nas
+scp ./file fnos-nas:/tmp/
+git clone git@github.com:owner/repository.git
+```
+
+`setup` 创建 owner-only 的 `~/.ssh/passman-agent.conf`，并在现有
+`~/.ssh/config` 顶部幂等加入一条 `Include`。OpenSSH 的 `IdentityAgent`
+直接指向 `~/.config/passman/ssh-agent.sock`，因此会覆盖对
+`SSH_AUTH_SOCK` 的需求。原有 Host、Hostname、User、Port、ProxyJump 和
+known_hosts 配置保持由 OpenSSH 管理。
+
+SSH Agent 只开放列出公钥和签名，拒绝远程协议添加、删除、锁定或导入密钥。
+每次签名进入 passman 审计链。锁定保险库、TTL 到期或 daemon 退出时 socket
+同时关闭。当前版本只加载未额外使用 passphrase 加密、字段名为
+`private_key`、策略为 `exec-only` 且未过期的 OpenSSH/PEM 私钥；解析失败的
+字段不会暴露给 SSH 客户端。
+
+> [!WARNING]
+> 不要开启 SSH agent forwarding（`ForwardAgent yes`）。标准 SSH Agent
+> 签名请求通常不包含最终目标主机，第一版无法按目标 Host 限制签名授权。
+
+除兼容的 `entry#field` 外，也支持便于配置文件保存的 URI 引用。以下引用等价：
+
+```text
+ssh/prod#private_key
+passman://ssh/prod/private_key
+passman://ssh/prod#private_key
+```
+
+每次允许或拒绝 `run`/人工 `reveal` 都会写入 owner-only 的哈希链审计日志；
+审计写入或校验失败时拒绝返回秘密：
+
+```sh
+passman audit list
+passman audit verify
+passman doctor
+```
+
+审计只记录秘密引用、动作、时间和目标程序 basename，不记录秘密值、参数、环境
+变量或子进程输出。`doctor` 检查数据目录、密文文件、公开目录和审计链的基本安全
+属性，并支持 JSON 输出供 Agent 判断。
 
 ## Agent 可查询的公开目录
 
@@ -112,6 +196,9 @@ passman backup restore --input backup.pmbak --replace
 - 对子进程 stdout/stderr 中完整秘密及私钥多行片段进行跨分块遮罩；
 - 对 IPC、字段大小、归档成员和路径进行限制；
 - 主密码变更、显式锁定和可选 TTL。
+- 字段级 exec-only、失效时间与轮换提醒元数据；
+- fail-closed 的哈希链访问审计和本地安全自检。
+- 标准、只读的 SSH Agent 协议集成，私钥只在 daemon 内参与签名。
 
 `passman` 不防御：
 

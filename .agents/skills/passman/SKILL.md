@@ -33,6 +33,8 @@ passman catalog list
 
 Catalog records contain `id`, `name`, `ip`, `url`, `note`, `tags`, and `secret_fields`. Use the returned entry ID and field name as `<entry>#<field>`; do not guess references when the catalog can answer the question.
 
+Both `<entry>#<field>` and `passman://<entry>/<field>` references are accepted. Prefer the URI form in persistent non-secret configuration and the compact form in one-off CLI commands.
+
 Use `passman status` before a secret-dependent operation. If it reports `locked`, stop that operation and ask the user to run `passman unlock` in a separate local terminal. Never request the master password in chat and never attempt to automate the password prompt.
 
 ## Use secrets without revealing them
@@ -74,9 +76,59 @@ credential-producing-command | passman entry set service#token --stdin
 passman entry set database#password --generate --length 32
 ```
 
+For credentials that an Agent must use but humans should not reveal, set an execution-only policy when creating or rotating the value:
+
+```sh
+passman entry set deploy#token --generate --length 32 --exec-only --expires-in 24h
+```
+
+`--expires-at` and `--rotate-after` accept RFC3339 timestamps. Omitting all policy flags when updating a value preserves its existing policy. An expired secret is refused on every access path.
+
+Inspect or incrementally change policy without supplying the value again:
+
+```sh
+passman entry policy get deploy#token
+passman entry policy set deploy#token --exec-only --expires-in 12h
+passman entry policy set deploy#token --allow-reveal --clear-expiry
+passman entry stale --within 30d
+```
+
+Policy changes alter access controls, so only perform them when the user explicitly requested that change. Prefer tightening policy; do not clear `exec-only` or expiry merely to make a failing operation succeed.
+
 Do not manufacture a pipeline with `echo`, `printf`, a here-document, or a literal secret. If no protected source exists, ask the user to run `passman entry set <entry>#<field>` interactively in a separate terminal.
 
 `entry set` and `entry remove` automatically update `secret_fields` in the public catalog. `passman entry list -o json` exposes only encrypted-vault metadata, never values.
+
+Use `passman audit verify` to validate the hash-chained access log and `passman doctor` to check owner-only paths, ciphertext files, the public catalog, and audit integrity. Audit records contain references and the target executable basename but never values, arguments, environments, or child output. If audit persistence fails, `run` and `reveal` fail closed.
+
+## Use SSH without secret injection syntax
+
+Passman exposes a standard, read-only SSH Agent socket when the daemon is unlocked. For ordinary SSH tasks, first run the safe metadata-only check:
+
+```sh
+passman ssh-agent status
+```
+
+If it succeeds and lists the intended key reference, use the original trusted tools directly:
+
+```sh
+ssh <configured-host>
+scp <source> <configured-host>:<destination>
+git clone git@<configured-host>:<owner>/<repository>.git
+```
+
+Do not set `SSH_AUTH_SOCK`, add `-i` temporary files, or wrap these commands with `passman run` when the passman SSH Agent is configured. OpenSSH obtains public identities and signatures over the configured `IdentityAgent` socket; private keys are never returned to the client.
+
+Only an unlocked daemon exposes keys. If `ssh-agent status` reports unavailable, ask the user to run `passman unlock` in a separate terminal. Do not unlock it for them. If the key is absent, verify through `entry list` that the field is named `private_key`, marked `exec_only`, and not expired; do not weaken its policy automatically.
+
+One-time OpenSSH configuration is a user-authorized mutation:
+
+```sh
+passman ssh-agent config
+passman ssh-agent setup --yes
+```
+
+Run `setup --yes` only when the user explicitly asked to configure native SSH integration. Never enable SSH agent forwarding for passman-managed keys. Standard agent requests do not reliably identify the destination host, so host-specific signature authorization is not yet guaranteed.
 
 ## Maintain public metadata
 

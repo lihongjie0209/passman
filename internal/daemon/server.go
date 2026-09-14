@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lihongjie0209/passman/internal/audit"
 	"github.com/lihongjie0209/passman/internal/ipc"
 	"github.com/lihongjie0209/passman/internal/platform"
 	"github.com/lihongjie0209/passman/internal/secure"
@@ -31,9 +32,12 @@ type Server struct {
 	stop      chan struct{}
 	stopOnce  sync.Once
 	lockTimer *time.Timer
+	audit     *audit.Log
 }
 
-func New(s *store.Store) *Server { return &Server{store: s, stop: make(chan struct{})} }
+func New(s *store.Store) *Server {
+	return &Server{store: s, stop: make(chan struct{}), audit: audit.New(s.Dir())}
+}
 
 func (s *Server) Serve(ctx context.Context, socket string) error {
 	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
@@ -65,12 +69,21 @@ func (s *Server) Serve(ctx context.Context, socket string) error {
 	if err := os.Chmod(socket, 0o600); err != nil {
 		return err
 	}
+	sshSocket := filepath.Join(s.store.Dir(), "ssh-agent.sock")
+	sshListener, err := s.listenSSHAgent(sshSocket)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sshListener.Close(); _ = os.Remove(sshSocket) }()
+	go s.acceptSSHAgent(sshListener)
 	go func() {
 		select {
 		case <-ctx.Done():
 			_ = ln.Close()
+			_ = sshListener.Close()
 		case <-s.stop:
 			_ = ln.Close()
+			_ = sshListener.Close()
 		}
 	}()
 	for {
@@ -154,7 +167,7 @@ func (s *Server) dispatch(req *ipc.Request) ipc.Response {
 	}
 	switch req.Op {
 	case "set":
-		if err := s.data.Set(req.Ref, req.Value); err != nil {
+		if err := s.data.SetWithPolicy(req.Ref, req.Value, req.Policy, req.PolicySet); err != nil {
 			return fail(err)
 		}
 		if err := s.store.Save(s.data, s.identity.Recipient()); err != nil {
@@ -171,22 +184,51 @@ func (s *Server) dispatch(req *ipc.Request) ipc.Response {
 		return ok()
 	case "list":
 		return ipc.Response{OK: true, Metadata: s.data.List(req.Prefix)}
+	case "policy_get":
+		policy, err := s.data.Policy(req.Ref)
+		if err != nil {
+			return fail(err)
+		}
+		return ipc.Response{OK: true, Policy: &policy}
+	case "policy_set":
+		if len(req.PolicyFields) == 0 {
+			return fail(errors.New("no policy changes requested"))
+		}
+		if err := s.data.UpdatePolicy(req.Ref, req.Policy, req.PolicyFields); err != nil {
+			return fail(err)
+		}
+		if err := s.store.Save(s.data, s.identity.Recipient()); err != nil {
+			return fail(err)
+		}
+		return ok()
 	case "resolve":
 		values := make(map[string][]byte, len(req.Refs))
 		total := 0
 		for _, ref := range req.Refs {
-			value, err := s.data.Get(ref)
+			value, err := s.data.Resolve(ref)
 			if err != nil {
 				wipeValues(values)
+				if auditErr := s.audit.Append("run_denied", req.Refs, req.Program); auditErr != nil {
+					return fail(errors.New("audit write failed; secret access denied"))
+				}
 				return fail(err)
 			}
 			total += len(value)
 			if total > 8<<20 {
 				clear(value)
 				wipeValues(values)
+				if auditErr := s.audit.Append("run_denied", req.Refs, req.Program); auditErr != nil {
+					return fail(errors.New("audit write failed; secret access denied"))
+				}
 				return fail(errors.New("resolved secrets exceed 8 MiB limit"))
 			}
 			values[ref] = value
+		}
+		if len(req.Refs) > 0 {
+			if err := s.audit.Append("run_allowed", req.Refs, req.Program); err != nil {
+				wipeValues(values)
+				return fail(errors.New("audit write failed; secret access denied"))
+			}
 		}
 		return ipc.Response{OK: true, Values: values}
 	case "reveal":
@@ -196,11 +238,21 @@ func (s *Server) dispatch(req *ipc.Request) ipc.Response {
 		}
 		id, err := secure.DecryptIdentity(encID, req.Password)
 		if err != nil || subtle.ConstantTimeCompare([]byte(idString(id)), []byte(s.identity.String())) != 1 {
+			if auditErr := s.audit.Append("reveal_denied", []string{req.Ref}, ""); auditErr != nil {
+				return fail(errors.New("audit write failed; secret access denied"))
+			}
 			return fail(errors.New("authentication failed"))
 		}
 		value, err := s.data.Get(req.Ref)
 		if err != nil {
+			if auditErr := s.audit.Append("reveal_denied", []string{req.Ref}, ""); auditErr != nil {
+				return fail(errors.New("audit write failed; secret access denied"))
+			}
 			return fail(err)
+		}
+		if err := s.audit.Append("reveal_allowed", []string{req.Ref}, ""); err != nil {
+			clear(value)
+			return fail(errors.New("audit write failed; secret access denied"))
 		}
 		return ipc.Response{OK: true, Value: value}
 	case "passwd":

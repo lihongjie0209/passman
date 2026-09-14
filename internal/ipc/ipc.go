@@ -15,15 +15,19 @@ import (
 const MaxMessage = 12 << 20
 
 type Request struct {
-	Op          string   `json:"op"`
-	Password    []byte   `json:"password,omitempty"`
-	NewPassword []byte   `json:"new_password,omitempty"`
-	Ref         string   `json:"ref,omitempty"`
-	Target      string   `json:"target,omitempty"`
-	Value       []byte   `json:"value,omitempty"`
-	Refs        []string `json:"refs,omitempty"`
-	Prefix      string   `json:"prefix,omitempty"`
-	TTLSeconds  int64    `json:"ttl_seconds,omitempty"`
+	Op           string       `json:"op"`
+	Password     []byte       `json:"password,omitempty"`
+	NewPassword  []byte       `json:"new_password,omitempty"`
+	Ref          string       `json:"ref,omitempty"`
+	Target       string       `json:"target,omitempty"`
+	Value        []byte       `json:"value,omitempty"`
+	Refs         []string     `json:"refs,omitempty"`
+	Prefix       string       `json:"prefix,omitempty"`
+	TTLSeconds   int64        `json:"ttl_seconds,omitempty"`
+	Policy       vault.Policy `json:"policy,omitempty"`
+	PolicySet    bool         `json:"policy_set,omitempty"`
+	PolicyFields []string     `json:"policy_fields,omitempty"`
+	Program      string       `json:"program,omitempty"`
 }
 
 type Response struct {
@@ -32,6 +36,7 @@ type Response struct {
 	Values   map[string][]byte `json:"values,omitempty"`
 	Value    []byte            `json:"value,omitempty"`
 	Metadata []vault.Metadata  `json:"metadata,omitempty"`
+	Policy   *vault.Policy     `json:"policy,omitempty"`
 }
 
 type Client struct{ Socket string }

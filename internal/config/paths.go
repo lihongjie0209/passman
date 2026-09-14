@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-type Paths struct{ DataDir, RuntimeDir, Socket string }
+type Paths struct{ DataDir, RuntimeDir, Socket, SSHSocket string }
 
 func Resolve() (Paths, error) {
 	dataDir := os.Getenv("PASSMAN_HOME")
@@ -24,5 +24,10 @@ func Resolve() (Paths, error) {
 	if runtimeDir == "" {
 		runtimeDir = filepath.Join(os.TempDir(), fmt.Sprintf("passman-%d", os.Getuid()))
 	}
-	return Paths{DataDir: dataDir, RuntimeDir: runtimeDir, Socket: filepath.Join(runtimeDir, "daemon.sock")}, nil
+	return Paths{
+		DataDir:    dataDir,
+		RuntimeDir: runtimeDir,
+		Socket:     filepath.Join(runtimeDir, "daemon.sock"),
+		SSHSocket:  filepath.Join(dataDir, "ssh-agent.sock"),
+	}, nil
 }
