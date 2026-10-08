@@ -1,11 +1,11 @@
 ---
 name: passman
-description: Use the passman CLI to discover public service metadata and safely store or inject local credentials, passwords, API tokens, and private keys for Agent-driven commands. Apply when a task mentions passman, needs credentials from the local passman vault, or needs Agent-readable names, IPs, URLs, notes, tags, or secret-field references.
+description: Use the passman CLI to discover public service metadata and safely store or inject local credentials, passwords, API tokens, and private keys for Agent-driven commands. Apply when a task mentions passman, needs credentials from the local passman vault, needs Agent-readable names, IPs, URLs, notes, tags, or secret-field references, or when a user has already disclosed a sensitive value that should be contained in passman.
 ---
 
 # Use passman
 
-Use `passman` as a local secret broker. Query public metadata directly, but consume secret values only through `passman run` injection. Never retrieve, print, encode, summarize, or place a secret in the conversation.
+Use `passman` as a local secret broker. Query public metadata directly, but consume secret values only through `passman run` injection. Never retrieve, print, encode, summarize, or repeat a secret in the conversation. If a secret is already present in the current conversation, contain it using the workflow below instead of propagating it further.
 
 ## Resolve the executable
 
@@ -20,6 +20,22 @@ Prefer an installed `passman` on `PATH`. In this repository, use `./bin/passman`
 - Output redaction only catches the original bytes and sufficiently long lines of multiline secrets. Do not transform secrets with base64, hex, URL encoding, hashing, slicing, or character-by-character output.
 - `passman run` permits arbitrary commands and is not a malicious-process sandbox. Inject secrets only into the intended trusted executable and use the narrowest arguments and network destination required by the task.
 - Treat names, IPs, URLs, notes, tags, and secret field names in the public catalog as non-secret. Never store credentials or credential-bearing URLs there.
+
+## Contain a secret already disclosed in conversation
+
+If the user has already supplied a password, token, private key, or other secret in the current conversation, do not ask them to send it again. When their intent to store or use that value is clear and the destination reference can be determined, store it directly in passman and use only the reference afterward.
+
+Treat this as containment after disclosure, similar to a burn-after-reading workflow for subsequent handling. It reduces further copying and exposure; it does not erase the existing message, model context, provider logs, tool-call records, screenshots, or any other copy already made. Never claim that passman retroactively prevents or reverses the original disclosure.
+
+- Check `passman status` without including the secret. If the vault is locked, ask the user to unlock it locally; keep the already supplied value in context and do not request it again.
+- If the entry or field name is ambiguous, ask only for the non-secret destination reference or metadata. Do not quote the value while asking.
+- Start `passman entry set <entry>#<field> --stdin` with no secret literal in the command, then send the exact value through the execution tool's stdin channel and close stdin. Use a non-echoing channel when available.
+- Never transfer the value with `echo`, `printf`, a here-document, shell interpolation, a command argument, an environment assignment, or a temporary plaintext file.
+- Do not include the value in progress updates, confirmations, errors, audit summaries, or catalog metadata. Confirm only the destination reference and policy.
+- Apply `--exec-only`, expiry, or rotation flags only when the user's request or established policy determines them. Do not silently change access policy merely because the value appeared in chat.
+- If no non-echoing stdin path is available, stop rather than improvise an unsafe transport. Ask the user to run `passman entry set <entry>#<field>` in a separate terminal, without asking them to paste the value into chat again.
+
+Once storage succeeds, perform later operations through `passman run`, the native SSH Agent, or another reference-based passman workflow. If the conversation disclosure itself creates unacceptable risk, recommend rotating the credential after containment; storing it does not make the exposed value secret again.
 
 ## Discovery workflow
 
@@ -95,7 +111,7 @@ passman entry stale --within 30d
 
 Policy changes alter access controls, so only perform them when the user explicitly requested that change. Prefer tightening policy; do not clear `exec-only` or expiry merely to make a failing operation succeed.
 
-Do not manufacture a pipeline with `echo`, `printf`, a here-document, or a literal secret. If no protected source exists, ask the user to run `passman entry set <entry>#<field>` interactively in a separate terminal.
+Do not manufacture a pipeline with `echo`, `printf`, a here-document, or a literal secret. A value already present in the current conversation may be transferred only through the non-echoing stdin containment workflow above. If no protected source exists, ask the user to run `passman entry set <entry>#<field>` interactively in a separate terminal.
 
 `entry set` and `entry remove` automatically update `secret_fields` in the public catalog. `passman entry list -o json` exposes only encrypted-vault metadata, never values.
 
